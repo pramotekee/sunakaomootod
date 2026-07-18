@@ -1,5 +1,6 @@
 <!doctype html><html lang='th'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Smart Self-Serve Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <style>
 body{font-family:Arial,sans-serif;background:#fff7ef;margin:0;color:#333}
 .card{max-width:420px;margin:24px auto;background:#fff;border-radius:20px;padding:20px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
@@ -20,11 +21,23 @@ button:disabled{background:#ccc}
 
 <div class="card hidden" id=p2>
   <h2>ชำระเงิน</h2>
-  <p>จำนวน <input id=qty type=number min=1 value=1 style='width:60px'> กล่อง</p>
-  <p>รวม <span id=total>33</span> บาท</p>
-  <div style='height:180px;background:#eee;border-radius:10px;display:flex;align-items:center;justify-content:center'>QR MOCK</div><br>
+  <p>ต้องการซื้อจำนวน <input id=qty type=number min=1 value=1 style='width:60px'> กล่อง</p>
+  <p class=center style='margin:4px 0 0'>ยอดที่ต้องชำระ</p>
+  <div class="price center" id=total>33</div>
+  <p class=center style='color:#888;font-size:13px;margin-top:-8px'>บาท (รวมทุกกล่องแล้ว)</p>
+  <div style='background:#fff3e6;border:1px solid #f9b95c;border-radius:10px;padding:16px;margin:16px 0'>
+    <p style='margin:0 0 6px;font-size:13px;color:#888'>โอนเงินเข้าบัญชี</p>
+    <p style='margin:0;font-size:16px'><b>ธนาคาร:</b> [ชื่อธนาคาร]</p>
+    <p style='margin:0;font-size:16px'><b>ชื่อบัญชี:</b> [ชื่อบัญชีของคุณ]</p>
+    <p style='margin:0;font-size:16px'><b>เลขที่บัญชี:</b> [xxx-x-xxxxx-x]</p>
+  </div>
+  <div style='margin:16px 0'>
+    <label style='font-size:14px;color:#555'>ส่งหลักฐานโอนเงินที่นี่ (แนบรูปสลิป)</label><br>
+    <input type="file" id="slipFile" accept="image/*" capture="environment" style="margin-top:8px;width:100%">
+  </div>
+  <div class=center id=ocrStatus style="font-size:13px;color:#888;min-height:36px"></div>
   <div class=err id=p2err></div>
-  <button onclick="paid()" id=paidBtn>ชำระเงินแล้ว</button>
+  <button onclick="paid()" id=paidBtn disabled>ชำระเงินแล้ว</button>
 </div>
 
 <div class="card hidden center" id=p3>
@@ -40,6 +53,10 @@ button:disabled{background:#ccc}
 const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
 const BRANCH_ID = '001';
 const UNIT_PRICE = 33;
+const TIME_WINDOW_MINUTES = 10; // slip timestamp must be within this many minutes of page load
+
+const pageLoadTime = new Date(); // reference point: when customer opened this page (scanned QR)
+let slipVerified = false;
 
 async function callApi(action, params) {
   const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
@@ -78,7 +95,77 @@ function goPay() {
 
 qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
 
+// ===== OCR slip verification =====
+// Extracts a HH:MM time and a numeric amount from the slip photo, then checks:
+//  1. amount === total we're expecting
+//  2. time is within TIME_WINDOW_MINUTES of when this page was opened
+// NOTE: this only catches honest mistakes (wrong screenshot, expired slip).
+// It does NOT prove the slip is authentic - an edited image can still pass.
+// Swap this function for a real slip-verification API (e.g. SlipOK/EasySlip)
+// when ready; the match logic below stays the same.
+
+slipFile.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  slipVerified = false;
+  paidBtn.disabled = true;
+  p2err.textContent = '';
+  ocrStatus.style.color = '#888';
+  ocrStatus.textContent = 'กำลังอ่านสลิป...';
+
+  try {
+    const { data: { text } } = await Tesseract.recognize(file, 'tha+eng');
+    const result = verifySlipText(text);
+
+    if (result.amountMatch && result.timeMatch) {
+      slipVerified = true;
+      paidBtn.disabled = false;
+      ocrStatus.style.color = '#2e7d32';
+      ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ ยอดเงินและเวลาถูกต้อง กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
+    } else {
+      const reasons = [];
+      if (!result.amountMatch) reasons.push('ไม่พบยอดเงิน ' + total.textContent + ' บาทในสลิป');
+      if (!result.timeMatch) reasons.push('เวลาในสลิปห่างจากตอนนี้เกิน ' + TIME_WINDOW_MINUTES + ' นาที หรืออ่านเวลาไม่พบ');
+      ocrStatus.style.color = '#c62828';
+      ocrStatus.textContent = '❌ ' + reasons.join(' และ ') + ' — ลองแนบรูปใหม่อีกครั้ง';
+    }
+  } catch (err) {
+    ocrStatus.style.color = '#c62828';
+    ocrStatus.textContent = 'อ่านรูปไม่สำเร็จ กรุณาลองใหม่ (' + err.message + ')';
+  }
+});
+
+function verifySlipText(text) {
+  const expectedAmount = Number(total.textContent);
+
+  // --- amount check ---
+  // Look for numbers like 66, 66.00, 1,234.50 anywhere in the OCR text
+  const amountMatches = text.match(/\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g) || [];
+  const amountMatch = amountMatches
+    .map(m => parseFloat(m.replace(/,/g, '')))
+    .some(n => Math.abs(n - expectedAmount) < 0.01);
+
+  // --- time check ---
+  // Look for HH:MM patterns (24-hour, as shown on Thai bank slips)
+  const timeMatches = text.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || [];
+  let timeMatch = false;
+  for (const t of timeMatches) {
+    const [h, m] = t.split(':').map(Number);
+    const slipTime = new Date(pageLoadTime);
+    slipTime.setHours(h, m, 0, 0);
+    const diffMinutes = Math.abs(pageLoadTime - slipTime) / 60000;
+    if (diffMinutes <= TIME_WINDOW_MINUTES) {
+      timeMatch = true;
+      break;
+    }
+  }
+
+  return { amountMatch, timeMatch };
+}
+
 async function paid() {
+  if (!slipVerified) return; // safety net; button should already be disabled
   p2err.textContent = '';
   setLoading(document.getElementById('p2'), true);
   paidBtn.disabled = true;
@@ -89,12 +176,13 @@ async function paid() {
       show('p3');
     } else {
       p2err.textContent = data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+      paidBtn.disabled = false;
     }
   } catch (err) {
     p2err.textContent = 'เชื่อมต่อไม่ได้ กรุณาลองใหม่';
+    paidBtn.disabled = false;
   } finally {
     setLoading(document.getElementById('p2'), false);
-    paidBtn.disabled = false;
   }
 }
 </script>
