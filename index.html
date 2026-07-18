@@ -1,0 +1,165 @@
+<!doctype html><html lang='th'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Smart Self-Serve Demo</title>
+<style>
+body{font-family:Arial,sans-serif;background:#fff7ef;margin:0;color:#333}
+.card{max-width:420px;margin:24px auto;background:#fff;border-radius:20px;padding:20px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+h1{color:#ef6c00}button{width:100%;padding:14px;border:0;border-radius:12px;background:#ef6c00;color:#fff;font-size:18px}
+button:disabled{background:#ccc}
+.hidden{display:none}.center{text-align:center}.price{font-size:42px;font-weight:bold}.pass{font-size:36px;letter-spacing:4px;color:#ef6c00}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.keypad button{background:#f5f5f5;color:#333}
+#door{height:120px;background:#ddd;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:28px}
+.err{color:#c62828;font-size:14px;min-height:18px}
+.loading{opacity:.6;pointer-events:none}
+</style></head><body>
+<div class=card id=p1>
+  <h1 id=productName>สู้นะ! ข้าวหมูทอด</h1>
+  <p>อิ่มดีจัง มีตังค์เหลือเก็บ</p>
+  <div class=price>33 บาท</div>
+  <p>เหลือวันนี้ <b id=stock>-</b> กล่อง</p>
+  <button onclick="goPay()">ซื้อเลย</button>
+</div>
+
+<div class="card hidden" id=p2>
+  <h2>ชำระเงิน</h2>
+  <p>จำนวน <input id=qty type=number min=1 value=1 style='width:60px'> กล่อง</p>
+  <p>รวม <span id=total>33</span> บาท</p>
+  <div style='height:180px;background:#eee;border-radius:10px;display:flex;align-items:center;justify-content:center'>QR MOCK</div><br>
+  <div class=err id=p2err></div>
+  <button onclick="paid()" id=paidBtn>ชำระเงินแล้ว</button>
+</div>
+
+<div class="card hidden center" id=p3>
+  <h2>ชำระเงินสำเร็จ</h2>
+  <div class=pass id=pass></div>
+  <p>ใช้ PASS นี้เปิดตู้ และเก็บไว้ลุ้นรางวัลประจำสัปดาห์</p>
+  <button onclick="unlock()">ไปเปิดตู้</button>
+</div>
+
+<div class="card hidden center" id=p4>
+  <h2>ใส่ PASS33</h2>
+  <input id=code readonly style='font-size:28px;text-align:center;width:180px'><br><br>
+  <div class=keypad id=kp></div><br>
+  <div class=err id=p4err></div>
+  <button onclick="check()" id=checkBtn>ยืนยัน</button>
+</div>
+
+<div class="card hidden center" id=p5>
+  <h2>ปลดล็อกสำเร็จ</h2>
+  <div id=door>🔓 ประตูเปิด</div>
+  <p>หยิบสินค้า แล้วปิดประตู ระบบจะล็อกทันที</p>
+  <button onclick="location.reload()">เสร็จสิ้น</button>
+</div>
+
+<script>
+// ===== CONFIG =====
+const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
+const BRANCH_ID = '001';
+const UNIT_PRICE = 33;
+
+let currentToken = '';
+
+// ===== API helper =====
+// Apps Script Web Apps often don't return CORS headers for POST from browsers,
+// so we use GET with query params for simplicity in this demo.
+async function callApi(action, params) {
+  const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
+  const res = await fetch(API_URL + '?' + query.toString());
+  const data = await res.json();
+  return data;
+}
+
+// ===== Page control =====
+function show(id) {
+  ['p1','p2','p3','p4','p5'].forEach(x => document.getElementById(x).classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+}
+
+function setLoading(el, isLoading) {
+  el.classList.toggle('loading', isLoading);
+}
+
+// ===== Load stock on page load =====
+async function loadStock() {
+  try {
+    const data = await callApi('getStock', {});
+    if (data.success) {
+      stock.textContent = data.current_stock;
+      if (data.product_name) productName.textContent = 'สู้นะ! ' + data.product_name;
+    } else {
+      stock.textContent = '?';
+    }
+  } catch (err) {
+    stock.textContent = '?';
+  }
+}
+loadStock();
+
+// ===== Step 1 -> 2 =====
+function goPay() {
+  show('p2');
+}
+
+qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
+
+// ===== Step 2 -> 3: create order (mock payment success) =====
+async function paid() {
+  p2err.textContent = '';
+  setLoading(document.getElementById('p2'), true);
+  paidBtn.disabled = true;
+  try {
+    const data = await callApi('createOrder', { qty: qty.value });
+    if (data.success) {
+      currentToken = data.token;
+      pass.textContent = 'PASS33-' + data.token;
+      show('p3');
+    } else {
+      p2err.textContent = data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    }
+  } catch (err) {
+    p2err.textContent = 'เชื่อมต่อไม่ได้ กรุณาลองใหม่';
+  } finally {
+    setLoading(document.getElementById('p2'), false);
+    paidBtn.disabled = false;
+  }
+}
+
+// ===== Step 3 -> 4 =====
+function unlock() {
+  code.value = '';
+  p4err.textContent = '';
+  show('p4');
+}
+
+// ===== Keypad =====
+for (let i = 1; i <= 9; i++) {
+  let b = document.createElement('button');
+  b.textContent = i;
+  b.onclick = () => code.value += i;
+  kp.appendChild(b);
+}
+let c = document.createElement('button'); c.textContent = '⌫'; c.onclick = () => code.value = code.value.slice(0, -1); kp.appendChild(c);
+let z = document.createElement('button'); z.textContent = '0'; z.onclick = () => code.value += '0'; kp.appendChild(z);
+let x = document.createElement('button'); x.textContent = 'CLR'; x.onclick = () => code.value = ''; kp.appendChild(x);
+
+// ===== Step 4 -> 5: verify token against server =====
+async function check() {
+  p4err.textContent = '';
+  setLoading(document.getElementById('p4'), true);
+  checkBtn.disabled = true;
+  try {
+    const data = await callApi('verifyToken', { token: code.value });
+    if (data.success) {
+      stock.textContent = data.remaining_stock;
+      show('p5');
+    } else {
+      p4err.textContent = data.error || 'PASS ไม่ถูกต้อง';
+    }
+  } catch (err) {
+    p4err.textContent = 'เชื่อมต่อไม่ได้ กรุณาลองใหม่';
+  } finally {
+    setLoading(document.getElementById('p4'), false);
+    checkBtn.disabled = false;
+  }
+}
+</script>
+</body></html>
