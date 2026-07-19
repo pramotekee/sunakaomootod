@@ -34,7 +34,7 @@ button:disabled{background:#ccc}
     <p style='margin:0 0 6px;font-size:13px;color:#888'>โอนเงินเข้าบัญชี</p>
     <p style='margin:0;font-size:16px'><b>ธนาคาร:</b> KBANK</p>
     <p style='margin:0;font-size:16px'><b>ชื่อบัญชี:</b> ปราโมทย์ กีรติเกรียงไกร</p>
-    <p style='margin:0;font-size:16px'><b>เลขที่บัญชี:</b> 738-2-40084-9</p>
+    <p style='margin:0;font-size:16px'><b>เลขที่บัญชี:</b> 738-2-40084-9 <button type="button" onclick="copyAccountNumber()" id=copyAccBtn style='width:auto;display:inline-block;padding:4px 10px;font-size:12px;border-radius:8px;margin-left:6px;vertical-align:middle'>คัดลอก</button></p>
   </div>
   <div style='margin:16px 0'>
     <label style='font-size:14px;color:#555'>ส่งหลักฐานโอนเงินที่นี่ (แนบรูปสลิป)</label><br>
@@ -76,11 +76,14 @@ if (!BRANCH_ID) {
 document.getElementById('branchLabel').textContent = BRANCH_ID;
 
 const UNIT_PRICE = 33;
-const TIME_WINDOW_MINUTES = 20; // slip timestamp must be within this many minutes of page load
+// Only the first name is checked - Thai bank slips usually show the
+// recipient's given name in full but often abbreviate/omit the surname,
+// so matching on the surname would fail far more often than it should.
+const EXPECTED_RECIPIENT_NAME = 'ปราโมทย์';
 
-let pageLoadTime = new Date(); // reference point: reset to the moment the customer clicks 'ซื้อเลย' (goPay)
 let slipVerified = false;
-let extractedBuyerName = ''; // best-effort name pulled from the slip photo via OCR
+let extractedBuyerName = ''; // best-effort sender name pulled from the slip photo via OCR
+let extractedSlipTime = ''; // raw HH:MM read off the slip photo, stored for analytics only
 
 async function callApi(action, params) {
   const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
@@ -226,24 +229,43 @@ function setupBannerDrag() {
 }
 
 function goPay() {
-  pageLoadTime = new Date(); // start the clock from the moment they choose qty, not from page/QR open
   show('p2');
+}
+
+// Copies the account number to clipboard so the customer can paste it
+// straight into their banking app instead of retyping it.
+function copyAccountNumber() {
+  const accountNumber = '738-2-40084-9';
+  const btn = document.getElementById('copyAccBtn');
+  const originalLabel = btn.textContent;
+  navigator.clipboard.writeText(accountNumber).then(() => {
+    btn.textContent = 'คัดลอกแล้ว ✓';
+    setTimeout(() => { btn.textContent = originalLabel; }, 1500);
+  }).catch(() => {
+    // Clipboard API can be blocked in some contexts (e.g. non-HTTPS) - fail silently,
+    // the account number is still visible on screen to copy manually.
+  });
 }
 
 qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
 
 // ===== OCR slip verification + best-effort buyer name extraction =====
-// Extracts a HH:MM time and a numeric amount from the slip photo, then checks:
+// Checks the slip photo for:
 //  1. amount === total we're expecting
-//  2. time is within TIME_WINDOW_MINUTES of when this page was opened
+//  2. the recipient name on the slip matches our account (EXPECTED_RECIPIENT_NAME)
+// There is no time-window check anymore - Trust Shelf doesn't care when the
+// transfer happened, only that it happened and went to the right place for
+// the right amount. The time printed on the slip is still extracted and
+// saved to the sheet, purely so you can see purchase-time patterns later -
+// it no longer affects whether the payment passes or fails.
 // It also tries to pull the sender's name straight off the slip, so the
 // customer never has to type their own name.
-// NOTE: name extraction is best-effort only. Thai bank apps often partially
-// mask the sender's name for privacy (e.g. "นายxxxxสมชาย"), and OCR on free-
-// text names is much less reliable than on digits/time. If nothing
-// confident can be extracted, we fall back to a generic "คุณลูกค้า" rather
-// than blocking the purchase.
-// This also only catches honest mistakes (wrong screenshot, expired slip) -
+// NOTE: both name extractions are best-effort only. Thai bank apps often
+// partially mask names for privacy (e.g. "นายxxxxสมชาย"), and OCR on free-
+// text names is much less reliable than on digits. If the sender's name
+// can't be confidently extracted, we fall back to a generic "คุณลูกค้า"
+// rather than blocking the purchase.
+// This also only catches honest mistakes (wrong screenshot, wrong slip) -
 // it does NOT prove the slip is authentic. Swap for a real slip-verification
 // API (e.g. SlipOK/EasySlip) when ready; the match logic below stays the same.
 
@@ -253,6 +275,7 @@ slipFile.addEventListener('change', async (e) => {
 
   slipVerified = false;
   extractedBuyerName = '';
+  extractedSlipTime = '';
   paidBtn.disabled = true;
   p2err.textContent = '';
   ocrStatus.style.color = '#888';
@@ -261,17 +284,18 @@ slipFile.addEventListener('change', async (e) => {
   try {
     const { data: { text } } = await Tesseract.recognize(file, 'tha+eng');
     const result = verifySlipText(text);
+    extractedSlipTime = extractSlipTime(text); // for analytics only, doesn't affect pass/fail
 
-    if (result.amountMatch && result.timeMatch) {
+    if (result.amountMatch && result.recipientMatch) {
       slipVerified = true;
       extractedBuyerName = extractBuyerName(text);
       paidBtn.disabled = false;
       ocrStatus.style.color = '#2e7d32';
-      ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ ยอดเงินและเวลาถูกต้อง กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
+      ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ ยอดเงินและชื่อผู้รับถูกต้อง กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
     } else {
       const reasons = [];
       if (!result.amountMatch) reasons.push('ไม่พบยอดเงิน ' + total.textContent + ' บาทในสลิป');
-      if (!result.timeMatch) reasons.push('เวลาในสลิปห่างจากตอนกดจำนวนที่ต้องการซื้อนานเกิน ' + TIME_WINDOW_MINUTES + ' นาที หรืออ่านเวลาไม่พบ');
+      if (!result.recipientMatch) reasons.push('ไม่พบชื่อผู้รับที่ตรงกันในสลิป');
       ocrStatus.style.color = '#c62828';
       ocrStatus.textContent = '❌ ' + reasons.join(' และ ') + ' — ลองแนบรูปใหม่อีกครั้ง';
     }
@@ -290,21 +314,21 @@ function verifySlipText(text) {
     .map(m => parseFloat(m.replace(/,/g, '')))
     .some(n => Math.abs(n - expectedAmount) < 0.01);
 
-  // --- time check ---
-  const timeMatches = text.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || [];
-  let timeMatch = false;
-  for (const t of timeMatches) {
-    const [h, m] = t.split(':').map(Number);
-    const slipTime = new Date(pageLoadTime);
-    slipTime.setHours(h, m, 0, 0);
-    const diffMinutes = Math.abs(pageLoadTime - slipTime) / 60000;
-    if (diffMinutes <= TIME_WINDOW_MINUTES) {
-      timeMatch = true;
-      break;
-    }
-  }
+  // --- recipient name check ---
+  // Strip all whitespace before matching, since OCR sometimes inserts stray
+  // line breaks/spaces in the middle of a Thai name.
+  const normalizedText = text.replace(/\s+/g, '');
+  const recipientMatch = normalizedText.includes(EXPECTED_RECIPIENT_NAME);
 
-  return { amountMatch, timeMatch };
+  return { amountMatch, recipientMatch };
+}
+
+// Pulls the first HH:MM found on the slip, purely to log actual transfer
+// times to the sheet for analytics (e.g. what time of day customers buy).
+// Not used to validate the payment - returns '' if nothing found.
+function extractSlipTime(text) {
+  const timeMatches = text.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || [];
+  return timeMatches.length > 0 ? timeMatches[0] : '';
 }
 
 // Best-effort sender-name extraction from OCR text. Tries a couple of
@@ -354,7 +378,7 @@ async function paid() {
   setLoading(document.getElementById('p2'), true);
   paidBtn.disabled = true;
   try {
-    const data = await callApi('createOrder', { qty: qty.value, buyer_name: extractedBuyerName });
+    const data = await callApi('createOrder', { qty: qty.value, buyer_name: extractedBuyerName, slip_time: extractedSlipTime });
     if (data.success) {
       pass.textContent = data.token;
       await renderThankYou(data);
