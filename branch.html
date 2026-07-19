@@ -14,7 +14,7 @@ button:disabled{background:#ccc}
 </style></head><body>
 
 <div class="card" id=p4>
-  <div class=tag>🔧 จำลองหน้าจอสาขา 001 (แทน ESP32 จริง)</div>
+  <div class=tag id=tagP4>🔧 จำลองหน้าจอสาขา (แทน ESP32 จริง)</div>
   <h2 class=center>กรอกรหัสปลดล็อก</h2>
   <input id=code readonly style='font-size:28px;text-align:center;width:100%;box-sizing:border-box;padding:10px'><br><br>
   <div class=keypad id=kp></div><br>
@@ -23,7 +23,7 @@ button:disabled{background:#ccc}
 </div>
 
 <div class="card hidden center" id=p5>
-  <div class=tag>🔧 จำลองหน้าจอสาขา 001 (แทน ESP32 จริง)</div>
+  <div class=tag id=tagP5>🔧 จำลองหน้าจอสาขา (แทน ESP32 จริง)</div>
   <h2>ปลดล็อกสำเร็จ</h2>
   <div id=door>🔓 ประตูเปิด</div>
   <p>หยิบสินค้า แล้วปิดประตู ระบบจะล็อกทันที</p>
@@ -33,7 +33,25 @@ button:disabled{background:#ccc}
 <script>
 // ===== CONFIG =====
 const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
-const BRANCH_ID = '001';
+
+// BRANCH_ID now comes from the URL's ?branch=... query string, not a
+// hardcoded constant. This lets one single HTML file serve every branch:
+// each branch's QR code just points to the same URL with a different
+// ?branch= value, e.g.
+//   https://yourdomain.com/branch.html?branch=001
+//   https://yourdomain.com/branch.html?branch=002
+//   https://yourdomain.com/branch.html?branch=003
+const urlParams = new URLSearchParams(window.location.search);
+const BRANCH_ID = urlParams.get('branch');
+
+if (!BRANCH_ID) {
+  document.body.innerHTML =
+    '<div class="card center"><h2>QR ไม่ถูกต้อง</h2><p>ไม่พบรหัสสาขาใน URL กรุณาสแกน QR ที่ตู้อีกครั้ง</p></div>';
+  throw new Error('Missing branch_id in URL');
+}
+
+document.getElementById('tagP4').textContent = '🔧 จำลองหน้าจอสาขา ' + BRANCH_ID + ' (แทน ESP32 จริง)';
+document.getElementById('tagP5').textContent = '🔧 จำลองหน้าจอสาขา ' + BRANCH_ID + ' (แทน ESP32 จริง)';
 
 async function callApi(action, params) {
   const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
