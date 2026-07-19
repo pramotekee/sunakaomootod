@@ -11,6 +11,9 @@ button:disabled{background:#ccc}
 .loading{opacity:.6;pointer-events:none}
 .branchBadge{max-width:420px;margin:16px auto 0;display:flex;justify-content:center}
 .branchBadge span{background:#2C2420;color:#fff;font-size:13px;font-weight:bold;padding:6px 16px;border-radius:999px;letter-spacing:.5px}
+.qtyBtn{width:auto;padding:12px 0;font-size:17px;font-weight:bold;border-radius:10px;background:#fff3e6;color:#ef6c00;border:1px solid #f9b95c}
+.qtyBtn.qtyBtnActive{background:#ef6c00;color:#fff}
+.lineBtn{display:inline-flex;align-items:center;gap:6px;background:#06C755;color:#fff;padding:10px 22px;border-radius:999px;font-size:14px;font-weight:bold;text-decoration:none}
 </style></head><body>
 <div class=branchBadge><span>🏪 ตู้สาขา <span id=branchLabel>-</span></span></div>
 <div class="hidden" id=heroBanner style='max-width:420px;margin:8px auto 0;overflow:hidden;position:relative;aspect-ratio:2/1'>
@@ -26,7 +29,13 @@ button:disabled{background:#ccc}
 
 <div class="card hidden" id=p2>
   <h2>ชำระเงิน</h2>
-  <p>ต้องการซื้อจำนวน <input id=qty type=number min=1 value=1 style='width:60px'> กล่อง</p>
+  <p style='margin:4px 0 8px'>ต้องการซื้อจำนวน (กล่อง)</p>
+  <input type="hidden" id="qty" value="1">
+  <div id=qtyButtons style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px'></div>
+  <div class="hidden" id=qtyCustomWrap style='margin-top:12px'>
+    <label style='font-size:14px;color:#555'>ระบุจำนวน (มากกว่า 10 กล่อง)</label><br>
+    <input id=qtyCustomInput type=number min=11 value=11 style='width:100%;box-sizing:border-box;margin-top:6px;padding:10px;border-radius:10px;border:1px solid #ddd;font-size:18px;text-align:center'>
+  </div>
   <p class=center style='margin:4px 0 0'>ยอดที่ต้องชำระ</p>
   <div class="price center" id=total>33</div>
   <p class=center style='color:#888;font-size:13px;margin-top:-8px'>บาท (รวมทุกกล่องแล้ว)</p>
@@ -41,6 +50,9 @@ button:disabled{background:#ccc}
     <input type="file" id="slipFile" accept="image/*" style="margin-top:8px;width:100%">
   </div>
   <div class=center id=ocrStatus style="font-size:13px;color:#888;min-height:36px"></div>
+  <div class="hidden center" id=lineContactWrap style="margin-top:4px">
+    <a class=lineBtn id=lineContactBtn href="https://lin.ee/1yzrdMU" target="_blank" rel="noopener">💬 ติดต่อทีมงานทาง LINE</a>
+  </div>
   <div class=err id=p2err></div>
   <button onclick="paid()" id=paidBtn disabled>ชำระเงินแล้ว</button>
 </div>
@@ -230,7 +242,49 @@ function setupBannerDrag() {
 }
 
 function goPay() {
+  selectQty(1);
   show('p2');
+}
+
+// ===== Quantity picker (tap-to-select buttons instead of free typing) =====
+function renderQtyButtons() {
+  const numbers = [1,2,3,4,5,6,7,8,9,10];
+  qtyButtons.innerHTML = numbers.map(n =>
+    '<button type="button" class="qtyBtn" data-qty="' + n + '" onclick="selectQty(' + n + ')">' + n + '</button>'
+  ).join('') + '<button type="button" class="qtyBtn" id="qtyMoreBtn" onclick="selectQtyMore()">มากกว่า 10</button>';
+}
+renderQtyButtons();
+
+function selectQty(n) {
+  qty.value = n;
+  qtyCustomWrap.classList.add('hidden');
+  total.textContent = n * UNIT_PRICE;
+  highlightSelectedQtyButton(n);
+}
+
+function selectQtyMore() {
+  qtyCustomWrap.classList.remove('hidden');
+  qtyCustomInput.focus();
+  const n = Math.max(11, parseInt(qtyCustomInput.value, 10) || 11);
+  qty.value = n;
+  total.textContent = n * UNIT_PRICE;
+  highlightSelectedQtyButton('more');
+}
+
+qtyCustomInput.addEventListener('input', () => {
+  const n = Math.max(11, parseInt(qtyCustomInput.value, 10) || 11);
+  qty.value = n;
+  total.textContent = n * UNIT_PRICE;
+});
+
+function highlightSelectedQtyButton(selected) {
+  document.querySelectorAll('.qtyBtn').forEach(btn => btn.classList.remove('qtyBtnActive'));
+  if (selected === 'more') {
+    qtyMoreBtn.classList.add('qtyBtnActive');
+  } else {
+    const btn = qtyButtons.querySelector('[data-qty="' + selected + '"]');
+    if (btn) btn.classList.add('qtyBtnActive');
+  }
 }
 
 // Copies the account number to clipboard so the customer can paste it
@@ -247,8 +301,6 @@ function copyAccountNumber() {
     // the account number is still visible on screen to copy manually.
   });
 }
-
-qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
 
 // ===== OCR slip verification + best-effort buyer name extraction =====
 // Checks the slip photo for:
@@ -284,6 +336,7 @@ slipFile.addEventListener('change', async (e) => {
   extractedSlipNumber = '';
   paidBtn.disabled = true;
   p2err.textContent = '';
+  lineContactWrap.classList.add('hidden');
   ocrStatus.style.color = '#888';
   ocrStatus.textContent = 'กำลังอ่านสลิป...';
 
@@ -301,7 +354,8 @@ slipFile.addEventListener('change', async (e) => {
       ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
     } else {
       ocrStatus.style.color = '#c62828';
-      ocrStatus.textContent = 'จากการตรวจสอบสลิปโอนเงินนี้ อาจมีข้อมูลที่ไม่ถูกต้อง โปรดลองใหม่อีกครั้ง หรือติดต่อ https://lin.ee/1yzrdMU';
+      ocrStatus.textContent = 'จากการตรวจสอบสลิปโอนเงินนี้ อาจมีข้อมูลที่ไม่ถูกต้อง โปรดลองใหม่อีกครั้ง หรือติดต่อทีมงาน';
+      lineContactWrap.classList.remove('hidden');
     }
   } catch (err) {
     ocrStatus.style.color = '#c62828';
