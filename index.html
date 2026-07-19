@@ -10,8 +10,11 @@ button:disabled{background:#ccc}
 .err{color:#c62828;font-size:14px;min-height:18px}
 .loading{opacity:.6;pointer-events:none}
 .testlink{display:block;text-align:center;margin-top:16px;color:#aaa;font-size:12px;text-decoration:none}
+.branchBadge{max-width:420px;margin:16px auto 0;display:flex;justify-content:center}
+.branchBadge span{background:#2C2420;color:#fff;font-size:13px;font-weight:bold;padding:6px 16px;border-radius:999px;letter-spacing:.5px}
 </style></head><body>
-<div class="hidden" id=heroBanner style='max-width:420px;margin:24px auto 0;border-radius:20px;overflow:hidden;position:relative;aspect-ratio:2/1'>
+<div class=branchBadge><span>🏪 ตู้สาขา <span id=branchLabel>-</span></span></div>
+<div class="hidden" id=heroBanner style='max-width:420px;margin:8px auto 0;border-radius:20px;overflow:hidden;position:relative;aspect-ratio:2/1'>
   <div id=bannerTrack style='display:flex;height:100%;touch-action:pan-y'></div>
 </div>
 <div class=card id=p1>
@@ -72,6 +75,7 @@ if (!BRANCH_ID) {
 }
 
 document.getElementById('branchTestLink').href = 'branch.html?branch=' + BRANCH_ID;
+document.getElementById('branchLabel').textContent = BRANCH_ID;
 
 const UNIT_PRICE = 33;
 const TIME_WINDOW_MINUTES = 20; // slip timestamp must be within this many minutes of page load
