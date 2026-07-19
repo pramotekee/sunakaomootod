@@ -9,7 +9,6 @@ button:disabled{background:#ccc}
 .hidden{display:none}.center{text-align:center}.price{font-size:42px;font-weight:bold}.pass{font-size:36px;letter-spacing:4px;color:#ef6c00}
 .err{color:#c62828;font-size:14px;min-height:18px}
 .loading{opacity:.6;pointer-events:none}
-.testlink{display:block;text-align:center;margin-top:16px;color:#aaa;font-size:12px;text-decoration:none}
 .branchBadge{max-width:420px;margin:16px auto 0;display:flex;justify-content:center}
 .branchBadge span{background:#2C2420;color:#fff;font-size:13px;font-weight:bold;padding:6px 16px;border-radius:999px;letter-spacing:.5px}
 </style></head><body>
@@ -49,22 +48,22 @@ button:disabled{background:#ccc}
 <div class="card hidden center" id=p3>
   <h2>ชำระเงินสำเร็จ</h2>
   <div class=pass id=pass></div>
-  <p>กรอกรหัสปลดล็อก 6 หลักนี้ที่ตู้</p>
+  <p>เลขนำโชคของคุณ</p>
+  <p id=luckyMsg style='font-size:14px;color:#555;margin-top:4px'></p>
+  <p id=thankyouMsg style='font-size:15px;color:#333;margin-top:14px;font-weight:bold'></p>
   <button onclick="location.reload()">เสร็จสิ้น</button>
-  <a class=testlink id=branchTestLink href="branch.html" target="_blank">ทดสอบหน้าจอสาขา (สำหรับทีมงานเท่านั้น)</a>
 </div>
 
 <script>
 // ===== CONFIG =====
 const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
 
-// BRANCH_ID now comes from the URL's ?branch=... query string, not a
-// hardcoded constant. This lets one single index.html serve every branch:
-// each branch just gets its own QR code pointing at the same site with a
-// different ?branch= value, e.g.
+// BRANCH_ID comes from the URL's ?branch=... query string, not a hardcoded
+// constant. One single index.html serves every branch - each branch just
+// gets its own QR code pointing at the same site with a different
+// ?branch= value, e.g.
 //   https://sunakaomootod.vercel.app/?branch=001
 //   https://sunakaomootod.vercel.app/?branch=002
-//   https://sunakaomootod.vercel.app/?branch=003
 const urlParams = new URLSearchParams(window.location.search);
 const BRANCH_ID = urlParams.get('branch');
 
@@ -74,7 +73,6 @@ if (!BRANCH_ID) {
   throw new Error('Missing branch_id in URL');
 }
 
-document.getElementById('branchTestLink').href = 'branch.html?branch=' + BRANCH_ID;
 document.getElementById('branchLabel').textContent = BRANCH_ID;
 
 const UNIT_PRICE = 33;
@@ -82,6 +80,7 @@ const TIME_WINDOW_MINUTES = 20; // slip timestamp must be within this many minut
 
 let pageLoadTime = new Date(); // reference point: reset to the moment the customer clicks 'ซื้อเลย' (goPay)
 let slipVerified = false;
+let extractedBuyerName = ''; // best-effort name pulled from the slip photo via OCR
 
 async function callApi(action, params) {
   const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
@@ -115,14 +114,9 @@ async function loadStock() {
 loadStock();
 
 // ===== Hero banner carousel (fetched from hero_banner sheet, admin-controlled) =====
-// Sushi-conveyor-belt behavior:
-//  - if there's only 1 banner, it just sits still (nothing to scroll to)
-//  - if there are 2+, it scrolls continuously right-to-left, looping seamlessly
-//  - the user can grab and drag it left/right at any time; it resumes the
-//    conveyor motion from wherever they let go (same feel as KITTIZEN's swipe)
 let bannerCount = 0;
-let trackPosition = 0;   // current translateX in px (0 or negative)
-let loopWidth = 0;       // px width of ONE full set of banners
+let trackPosition = 0;
+let loopWidth = 0;
 let isDragging = false;
 let dragStartX = 0;
 let dragStartPosition = 0;
@@ -138,14 +132,13 @@ async function loadBanners() {
       heroBanner.classList.remove('hidden');
     }
   } catch (err) {
-    // banner is decorative — fail silently, never block the main purchase flow
+    // banner is decorative - fail silently, never block the main purchase flow
   }
 }
 loadBanners();
 
 function renderBanners(banners) {
   bannerCount = banners.length;
-  // duplicate the set once so the belt has something to loop into (only needed if >1)
   const slides = bannerCount > 1 ? banners.concat(banners) : banners;
 
   bannerTrack.innerHTML = slides.map(b => {
@@ -166,14 +159,14 @@ function renderBanners(banners) {
     lastFrameTime = null;
     requestAnimationFrame(bannerFrame);
   } else {
-    heroBanner.style.cursor = 'default'; // only 1 banner: stays put, nothing to move to
+    heroBanner.style.cursor = 'default';
   }
 }
 
 function attachBannerClicks() {
   bannerTrack.querySelectorAll('div[data-link]').forEach(slide => {
     slide.addEventListener('click', () => {
-      if (dragTraveled > 5) return; // that was a drag, not a tap
+      if (dragTraveled > 5) return;
       const link = slide.getAttribute('data-link');
       if (link) window.open(link, '_blank');
     });
@@ -181,16 +174,16 @@ function attachBannerClicks() {
 }
 
 function bannerFrame(timestamp) {
-  if (bannerCount <= 1) return; // nothing to scroll — stop the loop entirely
+  if (bannerCount <= 1) return;
 
   if (lastFrameTime === null) lastFrameTime = timestamp;
   const dt = (timestamp - lastFrameTime) / 1000;
   lastFrameTime = timestamp;
 
   if (!isDragging) {
-    loopWidth = bannerTrack.scrollWidth / 2; // width of ONE set of banners
+    loopWidth = bannerTrack.scrollWidth / 2;
     trackPosition -= BANNER_SPEED_PX_PER_SEC * dt;
-    if (trackPosition <= -loopWidth) trackPosition += loopWidth; // seamless wrap, no jump-cut
+    if (trackPosition <= -loopWidth) trackPosition += loopWidth;
     bannerTrack.style.transform = 'translateX(' + trackPosition + 'px)';
   }
 
@@ -216,7 +209,6 @@ function setupBannerDrag() {
     if (!isDragging) return;
     isDragging = false;
     heroBanner.style.cursor = 'grab';
-    // normalize position so the belt never drifts out of the seamless loop range
     loopWidth = bannerTrack.scrollWidth / 2;
     if (loopWidth > 0) {
       trackPosition = trackPosition % loopWidth;
@@ -240,20 +232,27 @@ function goPay() {
 
 qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
 
-// ===== OCR slip verification =====
+// ===== OCR slip verification + best-effort buyer name extraction =====
 // Extracts a HH:MM time and a numeric amount from the slip photo, then checks:
 //  1. amount === total we're expecting
 //  2. time is within TIME_WINDOW_MINUTES of when this page was opened
-// NOTE: this only catches honest mistakes (wrong screenshot, expired slip).
-// It does NOT prove the slip is authentic - an edited image can still pass.
-// Swap this function for a real slip-verification API (e.g. SlipOK/EasySlip)
-// when ready; the match logic below stays the same.
+// It also tries to pull the sender's name straight off the slip, so the
+// customer never has to type their own name.
+// NOTE: name extraction is best-effort only. Thai bank apps often partially
+// mask the sender's name for privacy (e.g. "นายxxxxสมชาย"), and OCR on free-
+// text names is much less reliable than on digits/time. If nothing
+// confident can be extracted, we fall back to a generic "คุณลูกค้า" rather
+// than blocking the purchase.
+// This also only catches honest mistakes (wrong screenshot, expired slip) -
+// it does NOT prove the slip is authentic. Swap for a real slip-verification
+// API (e.g. SlipOK/EasySlip) when ready; the match logic below stays the same.
 
 slipFile.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
 
   slipVerified = false;
+  extractedBuyerName = '';
   paidBtn.disabled = true;
   p2err.textContent = '';
   ocrStatus.style.color = '#888';
@@ -265,6 +264,7 @@ slipFile.addEventListener('change', async (e) => {
 
     if (result.amountMatch && result.timeMatch) {
       slipVerified = true;
+      extractedBuyerName = extractBuyerName(text);
       paidBtn.disabled = false;
       ocrStatus.style.color = '#2e7d32';
       ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ ยอดเงินและเวลาถูกต้อง กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
@@ -285,14 +285,12 @@ function verifySlipText(text) {
   const expectedAmount = Number(total.textContent);
 
   // --- amount check ---
-  // Look for numbers like 66, 66.00, 1,234.50 anywhere in the OCR text
   const amountMatches = text.match(/\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g) || [];
   const amountMatch = amountMatches
     .map(m => parseFloat(m.replace(/,/g, '')))
     .some(n => Math.abs(n - expectedAmount) < 0.01);
 
   // --- time check ---
-  // Look for HH:MM patterns (24-hour, as shown on Thai bank slips)
   const timeMatches = text.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || [];
   let timeMatch = false;
   for (const t of timeMatches) {
@@ -309,15 +307,57 @@ function verifySlipText(text) {
   return { amountMatch, timeMatch };
 }
 
+// Best-effort sender-name extraction from OCR text. Tries a couple of
+// common Thai slip patterns, falls back to '' (generic thank-you) if
+// nothing confident is found.
+function extractBuyerName(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Pattern 1: a line containing the label "จาก" (From), name on same line
+  // or the line right after it.
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const sameLineMatch = line.match(/จาก[:\s]+(.{3,40})/);
+    if (sameLineMatch && sameLineMatch[1]) {
+      const cleaned = cleanExtractedName(sameLineMatch[1]);
+      if (cleaned) return cleaned;
+    }
+    if (/^จาก$/.test(line) && lines[i + 1]) {
+      const cleaned = cleanExtractedName(lines[i + 1]);
+      if (cleaned) return cleaned;
+    }
+  }
+
+  // Pattern 2: a line starting with a Thai/English honorific
+  const honorificPattern = /^(นาย|นาง|นางสาว|น\.ส\.|บริษัท|MR\.?|MRS\.?|MS\.?)\s*.+/i;
+  for (const line of lines) {
+    if (honorificPattern.test(line)) {
+      const cleaned = cleanExtractedName(line);
+      if (cleaned) return cleaned;
+    }
+  }
+
+  return ''; // couldn't confidently extract a name - caller falls back to generic wording
+}
+
+function cleanExtractedName(raw) {
+  // Keep Thai script, Latin letters, dots and spaces only; strip anything
+  // else OCR noise tends to pick up (numbers, symbols, stray punctuation).
+  const cleaned = raw.replace(/[^\u0E00-\u0E7Fa-zA-Z.\s]/g, '').trim();
+  if (cleaned.length < 3) return ''; // too short to be a real name, discard
+  return cleaned;
+}
+
 async function paid() {
   if (!slipVerified) return; // safety net; button should already be disabled
   p2err.textContent = '';
   setLoading(document.getElementById('p2'), true);
   paidBtn.disabled = true;
   try {
-    const data = await callApi('createOrder', { qty: qty.value });
+    const data = await callApi('createOrder', { qty: qty.value, buyer_name: extractedBuyerName });
     if (data.success) {
       pass.textContent = data.token;
+      await renderThankYou(data);
       show('p3');
     } else {
       p2err.textContent = data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่';
@@ -329,6 +369,28 @@ async function paid() {
   } finally {
     setLoading(document.getElementById('p2'), false);
   }
+}
+
+// Builds the p3 "เก็บโค้ดไว้ลุ้นโชค" + thank-you message. Announce date is
+// pulled live from the "lucky_draw" sheet (column: message, cell A2) so it
+// can be changed any time without touching code.
+async function renderThankYou(orderData) {
+  let announceDateText = 'เร็วๆ นี้';
+  try {
+    const luckyDrawData = await callApi('getLuckyDrawMessage', {});
+    if (luckyDrawData.success && luckyDrawData.message) {
+      announceDateText = luckyDrawData.message;
+    }
+  } catch (err) {
+    // fetch is decorative - never block showing the success screen
+  }
+
+  const displayName = orderData.buyer_name && orderData.buyer_name.trim()
+    ? orderData.buyer_name.trim()
+    : 'คุณลูกค้า';
+
+  luckyMsg.textContent = 'โปรดเก็บโค้ดนี้เพื่อร่วมสนุกประจำสัปดาห์นะครับ ประกาศรายชื่อผู้โชคดี ' + announceDateText;
+  thankyouMsg.textContent = 'ขอขอบคุณ ' + displayName + ' ที่ช่วยสนับสนุนจำนวน ' + orderData.qty + ' กล่อง ❤️';
 }
 </script>
 </body></html>
