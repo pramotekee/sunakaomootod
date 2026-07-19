@@ -56,9 +56,9 @@ button:disabled{background:#ccc}
 const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
 const BRANCH_ID = '001';
 const UNIT_PRICE = 33;
-const TIME_WINDOW_MINUTES = 10; // slip timestamp must be within this many minutes of page load
+const TIME_WINDOW_MINUTES = 20; // slip timestamp must be within this many minutes of page load
 
-const pageLoadTime = new Date(); // reference point: when customer opened this page (scanned QR)
+let pageLoadTime = new Date(); // reference point: reset to the moment the customer clicks 'ซื้อเลย' (goPay)
 let slipVerified = false;
 
 async function callApi(action, params) {
@@ -212,6 +212,7 @@ function setupBannerDrag() {
 }
 
 function goPay() {
+  pageLoadTime = new Date(); // start the clock from the moment they choose qty, not from page/QR open
   show('p2');
 }
 
@@ -248,7 +249,7 @@ slipFile.addEventListener('change', async (e) => {
     } else {
       const reasons = [];
       if (!result.amountMatch) reasons.push('ไม่พบยอดเงิน ' + total.textContent + ' บาทในสลิป');
-      if (!result.timeMatch) reasons.push('เวลาในสลิปห่างจากตอนนี้เกิน ' + TIME_WINDOW_MINUTES + ' นาที หรืออ่านเวลาไม่พบ');
+      if (!result.timeMatch) reasons.push('เวลาในสลิปห่างจากตอนกดจำนวนที่ต้องการซื้อนานเกิน ' + TIME_WINDOW_MINUTES + ' นาที หรืออ่านเวลาไม่พบ');
       ocrStatus.style.color = '#c62828';
       ocrStatus.textContent = '❌ ' + reasons.join(' และ ') + ' — ลองแนบรูปใหม่อีกครั้ง';
     }
