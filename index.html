@@ -12,7 +12,7 @@ button:disabled{background:#ccc}
 .testlink{display:block;text-align:center;margin-top:16px;color:#aaa;font-size:12px;text-decoration:none}
 </style></head><body>
 <div class="hidden" id=heroBanner style='max-width:420px;margin:24px auto 0;border-radius:20px;overflow:hidden;position:relative;aspect-ratio:2/1'>
-  <div id=bannerTrack style='display:flex;height:100%;transition:transform .4s ease;touch-action:pan-y'></div>
+  <div id=bannerTrack style='display:flex;height:100%;touch-action:pan-y'></div>
 </div>
 <div class=card id=p1>
   <h1 id=productName>สู้นะ! ข้าวเหนียวหมูทอด</h1>
@@ -36,7 +36,7 @@ button:disabled{background:#ccc}
   </div>
   <div style='margin:16px 0'>
     <label style='font-size:14px;color:#555'>ส่งหลักฐานโอนเงินที่นี่ (แนบรูปสลิป)</label><br>
-    <input type="file" id="slipFile" accept="image/*" capture="environment" style="margin-top:8px;width:100%">
+    <input type="file" id="slipFile" accept="image/*" style="margin-top:8px;width:100%">
   </div>
   <div class=center id=ocrStatus style="font-size:13px;color:#888;min-height:36px"></div>
   <div class=err id=p2err></div>
@@ -93,9 +93,20 @@ async function loadStock() {
 loadStock();
 
 // ===== Hero banner carousel (fetched from hero_banner sheet, admin-controlled) =====
-let bannerIndex = 0;
-let bannerTimer = null;
+// Sushi-conveyor-belt behavior:
+//  - if there's only 1 banner, it just sits still (nothing to scroll to)
+//  - if there are 2+, it scrolls continuously right-to-left, looping seamlessly
+//  - the user can grab and drag it left/right at any time; it resumes the
+//    conveyor motion from wherever they let go (same feel as KITTIZEN's swipe)
 let bannerCount = 0;
+let trackPosition = 0;   // current translateX in px (0 or negative)
+let loopWidth = 0;       // px width of ONE full set of banners
+let isDragging = false;
+let dragStartX = 0;
+let dragStartPosition = 0;
+let dragTraveled = 0;
+let lastFrameTime = null;
+const BANNER_SPEED_PX_PER_SEC = 40;
 
 async function loadBanners() {
   try {
@@ -112,46 +123,92 @@ loadBanners();
 
 function renderBanners(banners) {
   bannerCount = banners.length;
-  bannerTrack.innerHTML = banners.map(b => {
+  // duplicate the set once so the belt has something to loop into (only needed if >1)
+  const slides = bannerCount > 1 ? banners.concat(banners) : banners;
+
+  bannerTrack.innerHTML = slides.map(b => {
     const clickable = b.link_url ? 'cursor:pointer' : 'cursor:default';
     return '<div style="flex:0 0 100%;height:100%;' + clickable + '" data-link="' + (b.link_url || '') + '">' +
-      '<img src="' + b.image_url + '" style="width:100%;height:100%;object-fit:cover;display:block">' +
+      '<img src="' + b.image_url + '" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none" draggable="false">' +
       '</div>';
   }).join('');
 
+  trackPosition = 0;
+  bannerTrack.style.transform = 'translateX(0px)';
+
+  attachBannerClicks();
+  setupBannerDrag();
+
+  if (bannerCount > 1) {
+    heroBanner.style.cursor = 'grab';
+    lastFrameTime = null;
+    requestAnimationFrame(bannerFrame);
+  } else {
+    heroBanner.style.cursor = 'default'; // only 1 banner: stays put, nothing to move to
+  }
+}
+
+function attachBannerClicks() {
   bannerTrack.querySelectorAll('div[data-link]').forEach(slide => {
     slide.addEventListener('click', () => {
+      if (dragTraveled > 5) return; // that was a drag, not a tap
       const link = slide.getAttribute('data-link');
       if (link) window.open(link, '_blank');
     });
   });
-
-  goToBannerSlide(0);
-  startBannerAutoplay();
-  setupBannerSwipe();
 }
 
-function goToBannerSlide(i) {
-  bannerIndex = (i + bannerCount) % bannerCount;
-  bannerTrack.style.transform = 'translateX(-' + (bannerIndex * 100) + '%)';
+function bannerFrame(timestamp) {
+  if (bannerCount <= 1) return; // nothing to scroll — stop the loop entirely
+
+  if (lastFrameTime === null) lastFrameTime = timestamp;
+  const dt = (timestamp - lastFrameTime) / 1000;
+  lastFrameTime = timestamp;
+
+  if (!isDragging) {
+    loopWidth = bannerTrack.scrollWidth / 2; // width of ONE set of banners
+    trackPosition -= BANNER_SPEED_PX_PER_SEC * dt;
+    if (trackPosition <= -loopWidth) trackPosition += loopWidth; // seamless wrap, no jump-cut
+    bannerTrack.style.transform = 'translateX(' + trackPosition + 'px)';
+  }
+
+  requestAnimationFrame(bannerFrame);
 }
 
-function startBannerAutoplay() {
-  if (bannerTimer) clearInterval(bannerTimer);
-  if (bannerCount <= 1) return;
-  bannerTimer = setInterval(() => goToBannerSlide(bannerIndex + 1), 3000);
-}
-
-function setupBannerSwipe() {
-  let startX = 0;
-  bannerTrack.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; }, { passive: true });
-  bannerTrack.addEventListener('touchend', (e) => {
-    const diff = e.changedTouches[0].clientX - startX;
-    if (Math.abs(diff) > 40) {
-      goToBannerSlide(bannerIndex + (diff < 0 ? 1 : -1));
-      startBannerAutoplay(); // reset timer after a manual swipe
+function setupBannerDrag() {
+  const onDown = (clientX) => {
+    if (bannerCount <= 1) return;
+    isDragging = true;
+    dragTraveled = 0;
+    dragStartX = clientX;
+    dragStartPosition = trackPosition;
+    heroBanner.style.cursor = 'grabbing';
+  };
+  const onMove = (clientX) => {
+    if (!isDragging) return;
+    dragTraveled = Math.abs(clientX - dragStartX);
+    trackPosition = dragStartPosition + (clientX - dragStartX);
+    bannerTrack.style.transform = 'translateX(' + trackPosition + 'px)';
+  };
+  const onUp = () => {
+    if (!isDragging) return;
+    isDragging = false;
+    heroBanner.style.cursor = 'grab';
+    // normalize position so the belt never drifts out of the seamless loop range
+    loopWidth = bannerTrack.scrollWidth / 2;
+    if (loopWidth > 0) {
+      trackPosition = trackPosition % loopWidth;
+      if (trackPosition > 0) trackPosition -= loopWidth;
     }
-  }, { passive: true });
+  };
+
+  bannerTrack.addEventListener('touchstart', (e) => onDown(e.touches[0].clientX), { passive: true });
+  bannerTrack.addEventListener('touchmove', (e) => onMove(e.touches[0].clientX), { passive: true });
+  bannerTrack.addEventListener('touchend', onUp);
+
+  bannerTrack.addEventListener('mousedown', (e) => { e.preventDefault(); onDown(e.clientX); });
+  window.addEventListener('mousemove', (e) => onMove(e.clientX));
+  window.addEventListener('mouseup', onUp);
 }
 
 function goPay() {
