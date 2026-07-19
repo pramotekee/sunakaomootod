@@ -2,7 +2,7 @@
 <title>Smart Self-Serve Demo</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <style>
-body{font-family:Arial,sans-serif;background:#F1A039;margin:0;color:#333}
+body{font-family:Arial,sans-serif;background:#fff7ef;margin:0;color:#333}
 .card{max-width:420px;margin:24px auto;background:#fff;border-radius:20px;padding:20px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 h1{color:#ef6c00}button{width:100%;padding:14px;border:0;border-radius:12px;background:#ef6c00;color:#fff;font-size:18px}
 button:disabled{background:#ccc}
@@ -11,11 +11,14 @@ button:disabled{background:#ccc}
 .loading{opacity:.6;pointer-events:none}
 .testlink{display:block;text-align:center;margin-top:16px;color:#aaa;font-size:12px;text-decoration:none}
 </style></head><body>
+<div class="hidden" id=heroBanner style='max-width:420px;margin:24px auto 0;border-radius:20px;overflow:hidden;position:relative;aspect-ratio:2/1'>
+  <div id=bannerTrack style='display:flex;height:100%;transition:transform .4s ease;touch-action:pan-y'></div>
+</div>
 <div class=card id=p1>
   <h1 id=productName>สู้นะ! ข้าวเหนียวหมูทอด</h1>
   <p>อิ่มดีจัง มีตังค์เหลือเก็บ</p>
   <div class=price>33 บาท/กล่อง</div>
-  <p>ตอนนี้มีอยู่ <b id=stock>-</b> กล่อง</p>
+  <p>เหลือวันนี้ <b id=stock>-</b> กล่อง</p>
   <button onclick="goPay()">ซื้อเลย</button>
 </div>
 
@@ -88,6 +91,68 @@ async function loadStock() {
   }
 }
 loadStock();
+
+// ===== Hero banner carousel (fetched from hero_banner sheet, admin-controlled) =====
+let bannerIndex = 0;
+let bannerTimer = null;
+let bannerCount = 0;
+
+async function loadBanners() {
+  try {
+    const data = await callApi('getBanners', {});
+    if (data.success && data.banners && data.banners.length > 0) {
+      renderBanners(data.banners);
+      heroBanner.classList.remove('hidden');
+    }
+  } catch (err) {
+    // banner is decorative — fail silently, never block the main purchase flow
+  }
+}
+loadBanners();
+
+function renderBanners(banners) {
+  bannerCount = banners.length;
+  bannerTrack.innerHTML = banners.map(b => {
+    const clickable = b.link_url ? 'cursor:pointer' : 'cursor:default';
+    return '<div style="flex:0 0 100%;height:100%;' + clickable + '" data-link="' + (b.link_url || '') + '">' +
+      '<img src="' + b.image_url + '" style="width:100%;height:100%;object-fit:cover;display:block">' +
+      '</div>';
+  }).join('');
+
+  bannerTrack.querySelectorAll('div[data-link]').forEach(slide => {
+    slide.addEventListener('click', () => {
+      const link = slide.getAttribute('data-link');
+      if (link) window.open(link, '_blank');
+    });
+  });
+
+  goToBannerSlide(0);
+  startBannerAutoplay();
+  setupBannerSwipe();
+}
+
+function goToBannerSlide(i) {
+  bannerIndex = (i + bannerCount) % bannerCount;
+  bannerTrack.style.transform = 'translateX(-' + (bannerIndex * 100) + '%)';
+}
+
+function startBannerAutoplay() {
+  if (bannerTimer) clearInterval(bannerTimer);
+  if (bannerCount <= 1) return;
+  bannerTimer = setInterval(() => goToBannerSlide(bannerIndex + 1), 3000);
+}
+
+function setupBannerSwipe() {
+  let startX = 0;
+  bannerTrack.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; }, { passive: true });
+  bannerTrack.addEventListener('touchend', (e) => {
+    const diff = e.changedTouches[0].clientX - startX;
+    if (Math.abs(diff) > 40) {
+      goToBannerSlide(bannerIndex + (diff < 0 ? 1 : -1));
+      startBannerAutoplay(); // reset timer after a manual swipe
+    }
+  }, { passive: true });
+}
 
 function goPay() {
   show('p2');
