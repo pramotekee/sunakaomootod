@@ -48,13 +48,31 @@ button:disabled{background:#ccc}
   <div class=pass id=pass></div>
   <p>กรอกรหัสปลดล็อก 6 หลักนี้ที่ตู้</p>
   <button onclick="location.reload()">เสร็จสิ้น</button>
-  <a class=testlink href="branch.html" target="_blank">ทดสอบหน้าจอสาขา (สำหรับทีมงานเท่านั้น)</a>
+  <a class=testlink id=branchTestLink href="branch.html" target="_blank">ทดสอบหน้าจอสาขา (สำหรับทีมงานเท่านั้น)</a>
 </div>
 
 <script>
 // ===== CONFIG =====
 const API_URL = 'https://script.google.com/macros/s/AKfycbyCQuzspeSSjobh5PKNwXk6UyrNMSikp7WLmm-SHN2Sz11v_baec3OKf1_EuNiGX6mx/exec';
-const BRANCH_ID = '001';
+
+// BRANCH_ID now comes from the URL's ?branch=... query string, not a
+// hardcoded constant. This lets one single index.html serve every branch:
+// each branch just gets its own QR code pointing at the same site with a
+// different ?branch= value, e.g.
+//   https://sunakaomootod.vercel.app/?branch=001
+//   https://sunakaomootod.vercel.app/?branch=002
+//   https://sunakaomootod.vercel.app/?branch=003
+const urlParams = new URLSearchParams(window.location.search);
+const BRANCH_ID = urlParams.get('branch');
+
+if (!BRANCH_ID) {
+  document.body.innerHTML =
+    '<div class="card center"><h1>QR ไม่ถูกต้อง</h1><p>ไม่พบรหัสสาขาใน URL กรุณาสแกน QR ที่ตู้อีกครั้ง</p></div>';
+  throw new Error('Missing branch_id in URL');
+}
+
+document.getElementById('branchTestLink').href = 'branch.html?branch=' + BRANCH_ID;
+
 const UNIT_PRICE = 33;
 const TIME_WINDOW_MINUTES = 20; // slip timestamp must be within this many minutes of page load
 
