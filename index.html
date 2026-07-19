@@ -13,7 +13,7 @@ button:disabled{background:#ccc}
 .branchBadge span{background:#2C2420;color:#fff;font-size:13px;font-weight:bold;padding:6px 16px;border-radius:999px;letter-spacing:.5px}
 </style></head><body>
 <div class=branchBadge><span>🏪 ตู้สาขา <span id=branchLabel>-</span></span></div>
-<div class="hidden" id=heroBanner style='max-width:420px;margin:8px auto 0;border-radius:20px;overflow:hidden;position:relative;aspect-ratio:2/1'>
+<div class="hidden" id=heroBanner style='max-width:420px;margin:8px auto 0;overflow:hidden;position:relative;aspect-ratio:2/1'>
   <div id=bannerTrack style='display:flex;height:100%;touch-action:pan-y'></div>
 </div>
 <div class=card id=p1>
@@ -84,6 +84,7 @@ const EXPECTED_RECIPIENT_NAME = 'ปราโมทย์';
 let slipVerified = false;
 let extractedBuyerName = ''; // best-effort sender name pulled from the slip photo via OCR
 let extractedSlipTime = ''; // raw HH:MM read off the slip photo, stored for analytics only
+let extractedSlipNumber = ''; // long reference/transaction number read off the slip, for tracing back to the bank if needed
 
 async function callApi(action, params) {
   const query = new URLSearchParams({ action, branch_id: BRANCH_ID, ...params });
@@ -253,21 +254,25 @@ qty.oninput = () => total.textContent = qty.value * UNIT_PRICE;
 // Checks the slip photo for:
 //  1. amount === total we're expecting
 //  2. the recipient name on the slip matches our account (EXPECTED_RECIPIENT_NAME)
-// There is no time-window check anymore - Trust Shelf doesn't care when the
-// transfer happened, only that it happened and went to the right place for
-// the right amount. The time printed on the slip is still extracted and
-// saved to the sheet, purely so you can see purchase-time patterns later -
-// it no longer affects whether the payment passes or fails.
+//  3. the date on the slip is TODAY (blocks people re-submitting an old slip)
+// On failure we intentionally show ONE generic message and never say which
+// check failed - if we told people exactly what was wrong (e.g. "date
+// doesn't match"), that's a roadmap for editing a fake slip to slip past
+// whichever check we named. Genuine mistakes (wrong photo, wrong slip)
+// still just need the person to try again with the right one.
+// The time printed on the slip is still extracted and saved to the sheet,
+// purely so you can see purchase-time patterns later - it doesn't affect
+// pass/fail.
 // It also tries to pull the sender's name straight off the slip, so the
 // customer never has to type their own name.
-// NOTE: both name extractions are best-effort only. Thai bank apps often
-// partially mask names for privacy (e.g. "นายxxxxสมชาย"), and OCR on free-
-// text names is much less reliable than on digits. If the sender's name
-// can't be confidently extracted, we fall back to a generic "คุณลูกค้า"
-// rather than blocking the purchase.
-// This also only catches honest mistakes (wrong screenshot, wrong slip) -
-// it does NOT prove the slip is authentic. Swap for a real slip-verification
-// API (e.g. SlipOK/EasySlip) when ready; the match logic below stays the same.
+// NOTE: name/date extraction is best-effort OCR only. Thai bank apps often
+// partially mask names for privacy, and slip date formats vary by bank
+// (พ.ศ./ค.ศ., 2-digit vs 4-digit year, Thai month abbreviations) - a
+// genuinely valid same-day slip could occasionally fail to match if a
+// bank's date format isn't covered below.
+// This also does NOT prove the slip is authentic. Swap for a real slip-
+// verification API (e.g. SlipOK/EasySlip) when ready; the match logic
+// below stays the same.
 
 slipFile.addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -276,6 +281,7 @@ slipFile.addEventListener('change', async (e) => {
   slipVerified = false;
   extractedBuyerName = '';
   extractedSlipTime = '';
+  extractedSlipNumber = '';
   paidBtn.disabled = true;
   p2err.textContent = '';
   ocrStatus.style.color = '#888';
@@ -285,19 +291,17 @@ slipFile.addEventListener('change', async (e) => {
     const { data: { text } } = await Tesseract.recognize(file, 'tha+eng');
     const result = verifySlipText(text);
     extractedSlipTime = extractSlipTime(text); // for analytics only, doesn't affect pass/fail
+    extractedSlipNumber = extractSlipReferenceNumber(text); // for tracing back to the bank only, doesn't affect pass/fail
 
-    if (result.amountMatch && result.recipientMatch) {
+    if (result.amountMatch && result.recipientMatch && result.dateMatch) {
       slipVerified = true;
       extractedBuyerName = extractBuyerName(text);
       paidBtn.disabled = false;
       ocrStatus.style.color = '#2e7d32';
-      ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ ยอดเงินและชื่อผู้รับถูกต้อง กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
+      ocrStatus.textContent = '✅ ตรวจสอบสลิปสำเร็จ กดปุ่มด้านล่างเพื่อดำเนินการต่อ';
     } else {
-      const reasons = [];
-      if (!result.amountMatch) reasons.push('ไม่พบยอดเงิน ' + total.textContent + ' บาทในสลิป');
-      if (!result.recipientMatch) reasons.push('ไม่พบชื่อผู้รับที่ตรงกันในสลิป');
       ocrStatus.style.color = '#c62828';
-      ocrStatus.textContent = '❌ ' + reasons.join(' และ ') + ' — ลองแนบรูปใหม่อีกครั้ง';
+      ocrStatus.textContent = 'จากการตรวจสอบสลิปโอนเงินนี้ อาจมีข้อมูลที่ไม่ถูกต้อง โปรดลองใหม่อีกครั้ง หรือติดต่อ https://lin.ee/1yzrdMU';
     }
   } catch (err) {
     ocrStatus.style.color = '#c62828';
@@ -320,7 +324,49 @@ function verifySlipText(text) {
   const normalizedText = text.replace(/\s+/g, '');
   const recipientMatch = normalizedText.includes(EXPECTED_RECIPIENT_NAME);
 
-  return { amountMatch, recipientMatch };
+  // --- date check (blocks re-submitted old slips) ---
+  const dateMatch = isSlipDateToday(normalizedText);
+
+  return { amountMatch, recipientMatch, dateMatch };
+}
+
+// Checks whether today's date appears on the slip, covering the real-world
+// formats seen on actual slips, e.g.:
+//   "4 ม.ค. 68, 09:54 น."      "4 Apr 26, 09:54 AM"
+//   "02 ธ.ค. 2569, 15:00"      "02 Dec 26, 15:00"
+//   "28 พ.ค. 2569 15:33"       "18 ส.ค. 69 05:10 น."
+// Day may or may not be zero-padded, month can be Thai or English
+// abbreviation, year can be 2 or 4 digit / Buddhist or Christian era, and
+// there may or may not be a comma before the time. Best-effort: covers the
+// formats seen most often, not guaranteed to catch every bank's layout.
+function isSlipDateToday(text) {
+  const now = new Date();
+  const dayNoPad = String(now.getDate());
+  const dayPad = dayNoPad.padStart(2, '0');
+  const yearCE = now.getFullYear();
+  const yearBE = yearCE + 543;
+  const yearCE2 = String(yearCE).slice(-2);
+  const yearBE2 = String(yearBE).slice(-2);
+
+  const thaiMonthAbbr = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][now.getMonth()];
+  const englishMonthAbbr = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'][now.getMonth()];
+
+  const days = [dayNoPad, dayPad];
+  const months = [thaiMonthAbbr, englishMonthAbbr];
+  const years = [String(yearCE), String(yearBE), yearCE2, yearBE2];
+
+  // Strip whitespace AND commas (comma placement before the time varies by
+  // bank), then lowercase so "Apr"/"apr" both match.
+  const normalized = text.replace(/[\s,]+/g, '').toLowerCase();
+
+  for (const d of days) {
+    for (const m of months) {
+      for (const y of years) {
+        if (normalized.includes((d + m + y).toLowerCase())) return true;
+      }
+    }
+  }
+  return false;
 }
 
 // Pulls the first HH:MM found on the slip, purely to log actual transfer
@@ -329,6 +375,24 @@ function verifySlipText(text) {
 function extractSlipTime(text) {
   const timeMatches = text.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/g) || [];
   return timeMatches.length > 0 ? timeMatches[0] : '';
+}
+
+// Best-effort extraction of the slip's long reference/transaction number
+// (called "เลขที่อ้างอิง", "รหัสอ้างอิง", "หมายเลขธุรกรรม", etc. depending on
+// the bank) - stored purely so you can trace a transaction back to the
+// bank later if something needs rechecking. Not used to validate payment.
+// Picks the longest run of 10+ digits found anywhere on the slip (banks
+// sometimes break it up with spaces/dashes, which are stripped out here).
+function extractSlipReferenceNumber(text) {
+  const candidates = text.match(/[0-9][0-9\-\s]{9,}[0-9]/g) || [];
+  let best = '';
+  for (const c of candidates) {
+    const digitsOnly = c.replace(/\D/g, '');
+    if (digitsOnly.length >= 10 && digitsOnly.length > best.length) {
+      best = digitsOnly;
+    }
+  }
+  return best;
 }
 
 // Best-effort sender-name extraction from OCR text. Tries a couple of
@@ -378,7 +442,7 @@ async function paid() {
   setLoading(document.getElementById('p2'), true);
   paidBtn.disabled = true;
   try {
-    const data = await callApi('createOrder', { qty: qty.value, buyer_name: extractedBuyerName, slip_time: extractedSlipTime });
+    const data = await callApi('createOrder', { qty: qty.value, buyer_name: extractedBuyerName, slip_time: extractedSlipTime, slip_number: extractedSlipNumber });
     if (data.success) {
       pass.textContent = data.token;
       await renderThankYou(data);
